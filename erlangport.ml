@@ -39,5 +39,3 @@ let interact f =
     write stdout reply;
     loop () in
   loop ()
-
-       

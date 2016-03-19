@@ -3,7 +3,7 @@ open Core.Std
 exception Parse_error of string * int
 exception Encode_error of string
                             
-type eterm =
+type t =
   | ET_Int of Int.t
   | ET_Atom of String.t
 
@@ -31,7 +31,10 @@ let encode wbyte wint wstr _wbuf term =
         wstr str
      | _ ->
         raise (Encode_error "Atom length exceeds 256 bytes")
-              
+
+(* The buffer code here is used to read and write terms from buffers *)
+(* as an intermediary point of the data. It is not perfect, but it is *)
+(* better than doing something else. *)
 module Buffer = struct               
   let read buf =
     let offset = ref 0 in
@@ -70,7 +73,6 @@ module Buffer = struct
     let wbuf = Buffer.add_buffer buf in
       wbyte 131;
       encode wbyte wint wstr wbuf term
-
 end
                   
 let of_buffer = Buffer.read
