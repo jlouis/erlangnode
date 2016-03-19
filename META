@@ -1,0 +1,6 @@
+name="ErlangNode"
+version="0.1.0"
+description="Run OCaml programs as Erlang hidden nodes"
+requires="core"
+archive(byte) = "erlangnode.cma"
+archive(native) = "erlangnode.cmxa"
