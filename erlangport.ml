@@ -38,4 +38,5 @@ let interact f =
     let reply = f term in
     write stdout reply;
     loop () in
-  loop ()
+  try loop () with
+  | Eterm.Parse_error (_,_) -> ()
