@@ -4,7 +4,7 @@ exception Parse_error of string * int
 exception Encode_error of string
 exception Invariant
             
-type t = ET_Int of Int.t
+type t = ET_Int of Int32.t
        | ET_Atom of String.t
        | ET_String of String.t
 
@@ -12,9 +12,10 @@ let decode rbyte rint rstr _rbuf =
   match rbyte() with
   (* INTEGERS *)
   | 97 ->
-     ET_Int (rbyte ())
+     ET_Int (Int32.of_int_exn (rbyte ()))
   | 98 ->
      ET_Int (rint ())
+  (* STRINGS / ATOMS *)
   | (100 | 107) as c ->
      let len2 = rbyte () in
      let len1 = rbyte() in
@@ -28,8 +29,10 @@ let decode rbyte rint rstr _rbuf =
 
 let encode wbyte wint wstr _wbuf term =
   match term with
-  | ET_Int n when n >= 0 && n < 256 -> wbyte 97; wbyte n
-  | ET_Int n -> wbyte 98; wint n
+  | ET_Int n ->
+    (match Int32.to_int_exn n with
+     | k when k >= 0 && k < 256 -> wbyte 97; wbyte k
+     | k -> wbyte 98; wint k)
   | ET_Atom str ->
      (match String.length str with
       | len when len < 256 ->
@@ -67,8 +70,7 @@ module Buffer = struct
         byte in
     let rint () = Int32.(
       let f a e = a + (shift_left (of_int_exn (rbyte ())) e) in
-        to_int_exn (
-            List.fold_left [24; 16; 8; 0] ~init:zero ~f:f)) in
+            List.fold_left [24; 16; 8; 0] ~init:zero ~f:f) in
     let istr len =
       let result = Buffer.sub buf !offset len in
         offset := !offset + len;
@@ -101,8 +103,3 @@ end
 let of_buffer = Buffer.read
 let to_buffer = Buffer.write
       
-  
-                       
-                   
-
-                              
