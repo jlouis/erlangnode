@@ -1,4 +1,5 @@
 open Core.Std
+open Bignum.Std
 
 exception Parse_error of string * int
 exception Encode_error of string
@@ -12,17 +13,38 @@ type t =
   | ET_String of String.t
   | ET_Float of float
   | ET_Binary of Buffer.t
+  | ET_BitBinary of Buffer.t * int
+  | ET_Pid of pid_ext
+  | ET_Bigint of Bigint.t
   | ET_Tuple of t list
   | ET_List of t list
-  | ET_Pid of pid_ext
  and
   pid_ext = { node : string;
               id : Int32.t;
               serial : Int32.t;
               creation : int }
-(*  | ET_BitBinary of Buffer.t * int
-  | ET_Port of string * Int32.t * Int32.t * int
-  | ET_Bignum of Num.t *)
+(* | ET_Port of string * Int32.t * Int32.t * int *)
+
+
+let rec read_big rbyte = function
+  | 0 -> Bigint.of_int 0
+  | n ->
+     let x256 = Bigint.of_int 256 in
+     let b = rbyte () |> Bigint.of_int in
+         let rest = read_big rbyte (n-1) in
+         Bigint.( x256 * rest + b)
+
+let rec split_big num =
+  let n256 = Bigint.of_int 256 in
+  match Bigint.( equal zero num ) with
+  | true -> []
+  | false ->
+     Bigint.(
+      let q = num / n256 in
+      let r = num % n256 in
+      to_int_exn r :: split_big q )
+          
+  
 
 let rec decode rbyte rint rstr rbuf () =
   let decode_term = decode rbyte rint rstr rbuf in
@@ -52,6 +74,17 @@ let rec decode rbyte rint rstr rbuf () =
         | 100 -> ET_Atom s
         | 107 -> ET_String s
         | _ -> raise Invariant)
+  (* BIGNUMS *)
+  | 110 ->
+     let n = rbyte () in
+     let sign = rbyte () in
+     let num = read_big rbyte n in
+     ET_Bigint (if sign > 0 then Bigint.neg num else num)
+  | 111 ->
+     let n = rint () |> Int32.to_int_exn in
+     let sign = rbyte () in
+     let num = read_big rbyte n in
+     ET_Bigint (if sign > 0 then Bigint.neg num else num)
   (* PID *)
   | 103 ->
      let node =
@@ -77,6 +110,11 @@ let rec decode rbyte rint rstr rbuf () =
      (match rbyte() with
       | 106 -> term
       | code -> parse_err "Improper list" code)
+  (* BINARY *)
+  | 77 ->
+     let len = rint () |> Int32.to_int_exn in
+     let bits = rbyte () in
+     ET_BitBinary (rbuf len, bits)
   | 109 ->
      let len = rint () |> Int32.to_int_exn in
        ET_Binary (rbuf len)
@@ -90,12 +128,26 @@ let rec encode wbyte wint wstr wbuf term =
     (match Int32.to_int_exn n with
      | k when k >= 0 && k < 256 -> wbyte 97; wbyte k
      | k -> wbyte 98; wint k)
+  | ET_Bigint n ->
+     let sign = match Bigint.sign n with Neg -> 1 | _ -> 0 in
+     let ds = split_big (Bigint.abs n) in
+     (match List.length ds with
+      | len when len < 256 ->
+         wbyte 110;
+         wbyte len;
+         wbyte sign;
+         List.iter ~f:wbyte ds
+      | len ->
+         wbyte 111;
+         wint len;
+         wbyte sign;
+         List.iter ~f:wbyte ds)
   | ET_Float f ->
-    let s = Printf.sprintf "%.20e" f in
-    let pad = String.make (31 - String.length s) (char_of_int 0) in
-    wbyte 99;
-    wstr s;
-    wstr pad
+     let s = Printf.sprintf "%.20e" f in
+     let pad = String.make (31 - String.length s) (char_of_int 0) in
+     wbyte 99;
+     wstr s;
+     wstr pad
   | ET_Atom str ->
      (match String.length str with
       | len when len < 256 ->
@@ -124,6 +176,12 @@ let rec encode wbyte wint wstr wbuf term =
     wbyte 109;
     wint (Buffer.length bin);
     wbuf bin
+  | ET_BitBinary (buf, 0) -> encode_term (ET_Binary buf)
+  | ET_BitBinary (buf, bits) ->
+    wbyte 77;
+    wint (Buffer.length buf);
+    wbyte bits;
+    wbuf buf
   | ET_Pid {node; id; serial; creation} ->
     wbyte 103;
     encode_term (ET_Atom node);

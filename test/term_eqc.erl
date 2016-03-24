@@ -38,9 +38,11 @@ term() ->
 term(0) ->
     oneof(
       [int_32bit(),
+       largeint(),
        atom(),
        non_empty(string()),
        binary(),
+       bitstring(),
        g_pid(),
        %% eqc_gen:largebinary(), %% Size problem detected
        float()]);
