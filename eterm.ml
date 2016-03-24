@@ -223,7 +223,7 @@ module Buffer = struct
     let rint64 () = Int64.(
       let f a e = a + (shift_left (of_int_exn (rbyte ())) e) in
         List.fold_left
-          [56; 48; 40; 32; 42; 16; 8; 0]
+          [56; 48; 40; 32; 24; 16; 8; 0]
           ~init:zero
           ~f:f) in
     let rstr len =
@@ -255,7 +255,7 @@ module Buffer = struct
         ~f:(fun n ->
           wbyte Int64.(to_int_exn (bit_and (shift_right_logical x n)
                                            n255)))
-        [56; 48; 40; 32; 42; 16; 8; 0] in
+        [56; 48; 40; 32; 24; 16; 8; 0] in
     let wstr = Buffer.add_string buf in
     let wbuf = Buffer.add_buffer buf in
       wbyte 131;
