@@ -4,7 +4,8 @@ compile: build
 
 build:
 	corebuild erlangport.cma
-
+	corebuild erlangport.cmxa
+	corebuild main.native
 
 install:
 	ocamlfind install node META _build/*

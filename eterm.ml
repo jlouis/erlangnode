@@ -4,17 +4,36 @@ exception Parse_error of string * int
 exception Encode_error of string
 exception Invariant
             
-type t = ET_Int of Int32.t
-       | ET_Atom of String.t
-       | ET_String of String.t
+let parse_err what code = raise (Parse_error (what, code))
 
-let decode rbyte rint rstr _rbuf =
+type t = 
+  | ET_Int of Int32.t
+  | ET_Atom of String.t
+  | ET_String of String.t
+  | ET_Float of float
+  | ET_Binary of Buffer.t
+  | ET_Tuple of t list
+  | ET_List of t list
+  | ET_Pid of string * Int32.t * Int32.t * int
+
+let rec decode rbyte rint rstr rbuf () =
+  let decode_term = decode rbyte rint rstr rbuf in
+  let rec list_of = function
+    | 0 -> []
+    | n ->
+      let e = decode_term () in
+        e :: list_of (n-1)
+  in
   match rbyte() with
   (* INTEGERS *)
-  | 97 ->
-     ET_Int (Int32.of_int_exn (rbyte ()))
-  | 98 ->
-     ET_Int (rint ())
+  | 97 -> ET_Int (Int32.of_int_exn (rbyte ()))
+  | 98 -> ET_Int (rint ())
+  (* FLOAT *)
+  | 99 ->
+     let s' = rstr 31 in
+     let zeros = String.index_exn s' (char_of_int 0) in
+     let s = String.sub s' ~pos:0 ~len:zeros in
+     ET_Float (float_of_string s)
   (* STRINGS / ATOMS *)
   | (100 | 107) as c ->
      let len2 = rbyte () in
@@ -25,14 +44,50 @@ let decode rbyte rint rstr _rbuf =
         | 100 -> ET_Atom s
         | 107 -> ET_String s
         | _ -> raise Invariant)
+  (* PID *)
+  | 103 ->
+     let node =
+       match decode_term () with
+       | ET_Atom atom -> atom
+       | _ -> parse_err "Wrong format in Pid" 103 in
+     let id = rint () in
+     let serial = rint () in
+     let creation = rbyte () in
+       ET_Pid (node, id, serial, creation)
+  (* TUPLE *)
+  | 104 ->
+     let arity = rbyte() in
+       ET_Tuple (list_of arity)
+  | 105 ->
+     let arity = rint() |> Int32.to_int_exn in
+       ET_Tuple (list_of arity)
+  (* LIST *)
+  | 106 -> ET_List []
+  | 108 ->
+     let len = rint() |> Int32.to_int_exn in
+     let term = ET_List (list_of len) in
+     (match rbyte() with
+      | 106 -> term
+      | code -> parse_err "Improper list" code)
+  | 109 ->
+     let len = rint () |> Int32.to_int_exn in
+       ET_Binary (rbuf len)
   | n -> raise (Parse_error ("unknown term tag", n))
 
-let encode wbyte wint wstr _wbuf term =
+
+let rec encode wbyte wint wstr wbuf term =
+  let encode_term = encode wbyte wint wstr wbuf in
   match term with
   | ET_Int n ->
     (match Int32.to_int_exn n with
      | k when k >= 0 && k < 256 -> wbyte 97; wbyte k
      | k -> wbyte 98; wint k)
+  | ET_Float f ->
+    let s = Printf.sprintf "%.20e" f in
+    let pad = String.make (31 - String.length s) (char_of_int 0) in
+    wbyte 99;
+    wstr s;
+    wstr pad
   | ET_Atom str ->
      (match String.length str with
       | len when len < 256 ->
@@ -57,6 +112,34 @@ let encode wbyte wint wstr _wbuf term =
          String.iter str
             ~f:(fun c -> wbyte 97; wbyte (int_of_char c));
          wbyte 106)
+  | ET_Binary bin ->
+    wbyte 109;
+    wint (Buffer.length bin);
+    wbuf bin
+  | ET_Pid (node, id, serial, creation) ->
+    wbyte 103;
+    encode_term (ET_Atom node);
+    wint (Int32.to_int_exn id);
+    wint (Int32.to_int_exn serial);
+    wbyte creation
+  | ET_Tuple l ->
+    (match List.length l with
+     | len when len < 256 ->
+         wbyte 104;
+         wbyte len;
+         List.iter ~f:encode_term l
+     | len ->
+         wbyte 105;
+         wint len;
+         List.iter ~f:encode_term l)
+  | ET_List [] -> wbyte 106
+  | ET_List lst ->
+    wbyte 108;
+    wint (List.length lst);
+    List.iter ~f:encode_term lst;
+    wbyte 106
+      
+
 
 (* The buffer code here is used to read and write terms from buffers *)
 (* as an intermediary point of the data. It is not perfect, but it is *)
@@ -70,18 +153,18 @@ module Buffer = struct
         byte in
     let rint () = Int32.(
       let f a e = a + (shift_left (of_int_exn (rbyte ())) e) in
-            List.fold_left [24; 16; 8; 0] ~init:zero ~f:f) in
-    let istr len =
+        List.fold_left [24; 16; 8; 0] ~init:zero ~f:f) in
+    let rstr len =
       let result = Buffer.sub buf !offset len in
         offset := !offset + len;
         result in
-    let ibuf len =
+    let rbuf len =
       let result = Buffer.create len in
-      let s = istr len in
+      let s = rstr len in
       Buffer.add_string result s;
       result in
     match rbyte() with
-    | 131 -> decode rbyte rint istr ibuf
+    | 131 -> decode rbyte rint rstr rbuf ()
     | n ->
        raise (Parse_error ("Eterm does not start with 131", n))
 
