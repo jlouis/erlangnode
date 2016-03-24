@@ -46,8 +46,8 @@ let rec split_big num =
           
   
 
-let rec decode rbyte rint rstr rbuf () =
-  let decode_term = decode rbyte rint rstr rbuf in
+let rec decode rbyte rint rint64 rstr rbuf () =
+  let decode_term = decode rbyte rint rint64 rstr rbuf in
   let rec list_of = function
     | 0 -> []
     | n ->
@@ -64,6 +64,9 @@ let rec decode rbyte rint rstr rbuf () =
      let zeros = String.index_exn s' (char_of_int 0) in
      let s = String.sub s' ~pos:0 ~len:zeros in
      ET_Float (float_of_string s)
+  | 70 ->
+     let x = rint64 () in
+     ET_Float (Int64.float_of_bits x)
   (* STRINGS / ATOMS *)
   | (100 | 107) as c ->
      let len2 = rbyte () in
@@ -121,8 +124,8 @@ let rec decode rbyte rint rstr rbuf () =
   | n -> raise (Parse_error ("unknown term tag", n))
 
 
-let rec encode wbyte wint wstr wbuf term =
-  let encode_term = encode wbyte wint wstr wbuf in
+let rec encode wbyte wint wint64 wstr wbuf term =
+  let encode_term = encode wbyte wint wint64 wstr wbuf in
   match term with
   | ET_Int n ->
     (match Int32.to_int_exn n with
@@ -143,11 +146,9 @@ let rec encode wbyte wint wstr wbuf term =
          wbyte sign;
          List.iter ~f:wbyte ds)
   | ET_Float f ->
-     let s = Printf.sprintf "%.20e" f in
-     let pad = String.make (31 - String.length s) (char_of_int 0) in
-     wbyte 99;
-     wstr s;
-     wstr pad
+     let i = Int64.bits_of_float f in
+     wbyte 70;
+     wint64 i
   | ET_Atom str ->
      (match String.length str with
       | len when len < 256 ->
@@ -219,6 +220,12 @@ module Buffer = struct
     let rint () = Int32.(
       let f a e = a + (shift_left (of_int_exn (rbyte ())) e) in
         List.fold_left [24; 16; 8; 0] ~init:zero ~f:f) in
+    let rint64 () = Int64.(
+      let f a e = a + (shift_left (of_int_exn (rbyte ())) e) in
+        List.fold_left
+          [56; 48; 40; 32; 42; 16; 8; 0]
+          ~init:zero
+          ~f:f) in
     let rstr len =
       let result = Buffer.sub buf !offset len in
         offset := !offset + len;
@@ -229,7 +236,7 @@ module Buffer = struct
       Buffer.add_string result s;
       result in
     match rbyte() with
-    | 131 -> decode rbyte rint rstr rbuf ()
+    | 131 -> decode rbyte rint rint64 rstr rbuf ()
     | n ->
        raise (Parse_error ("Eterm does not start with 131", n))
 
@@ -242,12 +249,18 @@ module Buffer = struct
           wbyte Int32.(to_int_exn (bit_and (shift_right_logical x32 n)
                                           0xFFl)))
         [24;16;8;0] in
+    let wint64 x =
+      let n255 = Int64.of_int_exn 255 in
+      List.iter
+        ~f:(fun n ->
+          wbyte Int64.(to_int_exn (bit_and (shift_right_logical x n)
+                                           n255)))
+        [56; 48; 40; 32; 42; 16; 8; 0] in
     let wstr = Buffer.add_string buf in
     let wbuf = Buffer.add_buffer buf in
       wbyte 131;
-      encode wbyte wint wstr wbuf term
+      encode wbyte wint wint64 wstr wbuf term
 end
                   
 let of_buffer = Buffer.read
 let to_buffer = Buffer.write
-      
