@@ -14,7 +14,15 @@ type t =
   | ET_Binary of Buffer.t
   | ET_Tuple of t list
   | ET_List of t list
-  | ET_Pid of string * Int32.t * Int32.t * int
+  | ET_Pid of pid_ext
+ and
+  pid_ext = { node : string;
+              id : Int32.t;
+              serial : Int32.t;
+              creation : int }
+(*  | ET_BitBinary of Buffer.t * int
+  | ET_Port of string * Int32.t * Int32.t * int
+  | ET_Bignum of Num.t *)
 
 let rec decode rbyte rint rstr rbuf () =
   let decode_term = decode rbyte rint rstr rbuf in
@@ -53,7 +61,7 @@ let rec decode rbyte rint rstr rbuf () =
      let id = rint () in
      let serial = rint () in
      let creation = rbyte () in
-       ET_Pid (node, id, serial, creation)
+       ET_Pid { node; id; serial; creation }
   (* TUPLE *)
   | 104 ->
      let arity = rbyte() in
@@ -116,7 +124,7 @@ let rec encode wbyte wint wstr wbuf term =
     wbyte 109;
     wint (Buffer.length bin);
     wbuf bin
-  | ET_Pid (node, id, serial, creation) ->
+  | ET_Pid {node; id; serial; creation} ->
     wbyte 103;
     encode_term (ET_Atom node);
     wint (Int32.to_int_exn id);
@@ -138,7 +146,6 @@ let rec encode wbyte wint wstr wbuf term =
     wint (List.length lst);
     List.iter ~f:encode_term lst;
     wbyte 106
-      
 
 
 (* The buffer code here is used to read and write terms from buffers *)
