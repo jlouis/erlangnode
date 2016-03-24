@@ -66,13 +66,10 @@ start_port() ->
 loop(P) ->
     receive
         {s, From, Term} ->
-            true = port_command(
-                     P,
-                     term_to_binary(Term, [{minor_version, 0}])),
+            true = port_command(P, Term),
             receive
               {P, {data, B}} ->
-                  Res = binary_to_term(B),
-                  From ! {r, Res}
+                  From ! {r, B}
             after 50 ->
                   loop(cycle(P))
             end,
@@ -102,13 +99,19 @@ stop_port() ->
 
 prop_port_correct() ->
     ?SETUP(fun () ->
-        start_port(),
-        fun() ->
-           stop_port()
-        end
+                   start_port(),
+                   fun() ->
+                           stop_port()
+                   end
     end,
     ?FORALL(T, term(),
-        equals(T, roundtrip(T)))).
+            begin
+                I = term_to_binary(T),
+                O = roundtrip(I),
+                conjunction(
+                  [{term, equals(T, binary_to_term(O))},
+                   {binary, equals(I, O)}])
+            end)).
 
 pipe_test(Sz) ->
     P = cycle(undefined),
