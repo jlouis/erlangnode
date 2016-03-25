@@ -32,6 +32,13 @@ g_pid() ->
              erlang:list_to_pid(binary_to_list(B))
          end).
 
+g_map(Gen) ->
+    ?LETSHRINK([Ks, Vs], ?LET({Ks, Vs},
+                             ?LET(Es, g_list({Gen, Gen}),
+                                  lists:unzip(Es)),
+                              [Ks, Vs]),
+               maps:from_list(lists:zip(Ks, Vs))).
+                              
 term() ->
     ?SIZED(Sz, term(Sz)).
 
@@ -48,10 +55,10 @@ term(0) ->
        float()]);
 term(N) ->
     frequency(
-      [{5, ?LAZY(term(0))},
-       {1, ?LAZY(
-              ?LETSHRINK(L, g_list(term(N div 4)), L))},
-       {1, ?LAZY(g_tuple(term(N div 4)))}]).
+      [{50, ?LAZY(term(0))},
+       {10, ?LAZY(g_map(term(N div 4)))},
+       {2, ?LAZY(?LETSHRINK(L, g_list(term(N div 8)), L))},
+       {10, ?LAZY(g_tuple(term(N div 4)))}]).
 
 start_port() ->
     Self = self(),

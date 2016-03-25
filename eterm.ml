@@ -18,6 +18,7 @@ type t =
   | ET_Bigint of Bigint.t
   | ET_Tuple of t list
   | ET_List of t list
+  | ET_Map of (t * t) list
  and
   pid_ext = { node : string;
               id : Int32.t;
@@ -52,7 +53,13 @@ let rec decode rbyte rint rint64 rstr rbuf () =
     | 0 -> []
     | n ->
       let e = decode_term () in
-        e :: list_of (n-1)
+        e :: list_of (n-1) in
+  let rec map_of = function
+    | 0 -> []
+    | n ->
+       let k = decode_term () in
+       let v = decode_term () in
+       (k,v) :: map_of (n-1)
   in
   match rbyte() with
   (* INTEGERS *)
@@ -117,10 +124,13 @@ let rec decode rbyte rint rint64 rstr rbuf () =
   | 77 ->
      let len = rint () |> Int32.to_int_exn in
      let bits = rbyte () in
-     ET_BitBinary (rbuf len, bits)
+       ET_BitBinary (rbuf len, bits)
   | 109 ->
      let len = rint () |> Int32.to_int_exn in
        ET_Binary (rbuf len)
+  | 116 ->
+     let arity = rint () |> Int32.to_int_exn in
+       ET_Map (map_of arity)
   | n -> raise (Parse_error ("unknown term tag", n))
 
 
@@ -205,6 +215,10 @@ let rec encode wbyte wint wint64 wstr wbuf term =
     wint (List.length lst);
     List.iter ~f:encode_term lst;
     wbyte 106
+  | ET_Map pairs ->
+    wbyte 116;
+    wint (List.length pairs);
+    List.iter ~f:(fun (k, v) -> encode_term k; encode_term v) pairs
 
 
 (* The buffer code here is used to read and write terms from buffers *)
