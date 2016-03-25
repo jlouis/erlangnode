@@ -18,8 +18,13 @@ float() ->
 g_list(Gen) ->
     list(Gen).
 
+g_tuple(K, Gen) ->
+    ?LET(L, vector(K, Gen),
+         list_to_tuple(L)).
+
 g_tuple(Gen) ->
-    ?LET(L, list(Gen), list_to_tuple(L)).
+    ?LET(L, list(Gen),
+         list_to_tuple(L)).
 
 g_pid() ->
     ?LET({X,Y,Z}, {0, nat(), nat()},
@@ -56,8 +61,9 @@ term(0) ->
 term(N) ->
     frequency(
       [{50, ?LAZY(term(0))},
-       {10, ?LAZY(g_map(term(N div 4)))},
-       {2, ?LAZY(?LETSHRINK(L, g_list(term(N div 8)), L))},
+       {1, ?LAZY(g_map(term(N div 4)))},
+       {10, ?LAZY(?LETSHRINK(L, g_list(term(N div 8)), L))},
+       %% {1, ?LAZY(?LET(K, choose(255, 512),g_tuple(K, term(N div 4))))},
        {10, ?LAZY(g_tuple(term(N div 4)))}]).
 
 start_port() ->
