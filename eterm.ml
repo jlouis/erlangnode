@@ -15,15 +15,53 @@ type t =
   | ET_Binary of Buffer.t
   | ET_BitBinary of Buffer.t * int
   | ET_Pid of pid_ext
+  | ET_Port of port_ext
   | ET_Bigint of Bigint.t
   | ET_Tuple of t list
   | ET_List of t list
   | ET_Map of (t * t) list
+  | ET_Ref of ref_ext
+  | ET_NRef of nref_ext
+  | ET_Fun of fun_ext
+  | ET_NFun of nf_ext
+  | ET_Export of exp_ext
  and
-  pid_ext = { node : string;
-              id : Int32.t;
-              serial : Int32.t;
-              creation : int }
+  ref_ext = { ref_node : string;
+              ref_id : Int32.t;
+              ref_creation : int }
+ and
+  nref_ext = { nref_node : string;
+               nref_creation : int;
+               nref_ids : Int32.t list }
+ and
+  pid_ext = { pid_node : string;
+              pid_id : Int32.t;
+              pid_serial : Int32.t;
+              pid_creation : int }
+ and
+  port_ext = { port_node : string;
+               port_id : Int32.t;
+               port_creation : int }
+ and
+  fun_ext = { fn_pid : t;
+              fn_module : string;
+              fn_index : int;
+              fn_uniq : int;
+              fn_free_vars : t list }
+ and
+  nf_ext = { nf_arity : int;
+             nf_uniq : string;
+             nf_index : int;
+             nf_num_free : int;
+             nf_module : string;
+             nf_old_index : int;
+             nf_old_uniq : int;
+             nf_rest : string }
+ and
+  exp_ext = { exp_module : string;
+              exp_function : string;
+              exp_args : Int32.t }
+
 (* | ET_Port of string * Int32.t * Int32.t * int *)
 
 
@@ -49,11 +87,15 @@ let rec split_big num =
 
 let rec decode rbyte rint rint64 rstr rbuf () =
   let decode_term = decode rbyte rint rint64 rstr rbuf in
-  let rec list_of = function
+  let decode_atom opcode =
+    match decode_term () with
+    | ET_Atom a -> a
+    | _ -> parse_err "Expected Atom for opcode" opcode in
+  let rec list_of f = function
     | 0 -> []
     | n ->
-      let e = decode_term () in
-        e :: list_of (n-1) in
+      let e = f () in
+        e :: list_of f (n-1) in
   let rec map_of = function
     | 0 -> []
     | n ->
@@ -97,26 +139,54 @@ let rec decode rbyte rint rint64 rstr rbuf () =
      ET_Bigint (if sign > 0 then Bigint.neg num else num)
   (* PID *)
   | 103 ->
-     let node =
+     let pid_node =
        match decode_term () with
        | ET_Atom atom -> atom
        | _ -> parse_err "Wrong format in Pid" 103 in
-     let id = rint () in
-     let serial = rint () in
-     let creation = rbyte () in
-       ET_Pid { node; id; serial; creation }
+     let pid_id = rint () in
+     let pid_serial = rint () in
+     let pid_creation = rbyte () in
+       ET_Pid { pid_node;
+                pid_id;
+                pid_serial;
+                pid_creation }
+  (* PORT *)
+  | 102 ->
+     let port_node = decode_atom 102 in
+     let port_id = rint () in
+     let port_creation = rbyte () in
+       ET_Port { port_node;
+                 port_id;
+                 port_creation }
+  (* REF *)
+  | 101 ->
+     let ref_node = decode_atom 101 in
+     let ref_id = rint () in
+     let ref_creation = rbyte () in
+       ET_Ref { ref_node;
+                ref_id;
+                ref_creation }
+  (* NREF *)
+  | 114 ->
+     let len2 = rbyte () in
+     let len1 = rbyte () in
+     let len = 256 * len2 + len1 in
+     let nref_node = decode_atom 114 in
+     let nref_creation = rbyte () in
+     let nref_ids = list_of rint len in
+       ET_NRef { nref_node; nref_creation; nref_ids }
   (* TUPLE *)
   | 104 ->
      let arity = rbyte() in
-       ET_Tuple (list_of arity)
+       ET_Tuple (list_of decode_term arity)
   | 105 ->
      let arity = rint() |> Int32.to_int_exn in
-       ET_Tuple (list_of arity)
+       ET_Tuple (list_of decode_term arity)
   (* LIST *)
   | 106 -> ET_List []
   | 108 ->
      let len = rint() |> Int32.to_int_exn in
-     let term = ET_List (list_of len) in
+     let term = ET_List (list_of decode_term len) in
      (match rbyte() with
       | 106 -> term
       | code -> parse_err "Improper list" code)
@@ -131,6 +201,17 @@ let rec decode rbyte rint rint64 rstr rbuf () =
   | 116 ->
      let arity = rint () |> Int32.to_int_exn in
        ET_Map (map_of arity)
+  (* EXPORT *)
+  | 113 ->
+     let m = decode_term () in
+     let f = decode_term () in
+     let a = decode_term () in
+     (match (m,f,a) with
+      | (ET_Atom exp_module,
+         ET_Atom exp_function,
+         ET_Int exp_args) -> ET_Export { exp_module; exp_function;
+                                         exp_args }
+      | _ -> parse_err "Export has wrong terms" 113)
   | n -> raise (Parse_error ("unknown term tag", n))
 
 
@@ -184,41 +265,65 @@ let rec encode wbyte wint wint64 wstr wbuf term =
             ~f:(fun c -> wbyte 97; wbyte (int_of_char c));
          wbyte 106)
   | ET_Binary bin ->
-    wbyte 109;
-    wint (Buffer.length bin);
-    wbuf bin
+     wbyte 109;
+     wint (Buffer.length bin);
+     wbuf bin
   | ET_BitBinary (buf, 0) -> encode_term (ET_Binary buf)
   | ET_BitBinary (buf, bits) ->
-    wbyte 77;
-    wint (Buffer.length buf);
-    wbyte bits;
-    wbuf buf
-  | ET_Pid {node; id; serial; creation} ->
-    wbyte 103;
-    encode_term (ET_Atom node);
-    wint (Int32.to_int_exn id);
-    wint (Int32.to_int_exn serial);
-    wbyte creation
+     wbyte 77;
+     wint (Buffer.length buf);
+     wbyte bits;
+     wbuf buf
+  | ET_Pid { pid_node; pid_id; pid_serial; pid_creation} ->
+     wbyte 103;
+     encode_term (ET_Atom pid_node);
+     wint (Int32.to_int_exn pid_id);
+     wint (Int32.to_int_exn pid_serial);
+     wbyte pid_creation
+  | ET_Ref { ref_node; ref_id; ref_creation } ->
+     wbyte 101;
+     encode_term (ET_Atom ref_node);
+     wint (Int32.to_int_exn ref_id);
+     wbyte ref_creation
+  | ET_NRef { nref_node; nref_creation; nref_ids } ->
+     let id_len = List.length nref_ids in
+     let a,b = id_len / 256, id_len mod 256 in
+     wbyte 114;
+     wbyte a;
+     wbyte b;
+     encode_term (ET_Atom nref_node);
+     wbyte nref_creation;
+     List.iter ~f:(fun n -> wint (Int32.to_int_exn n)) nref_ids
+  | ET_Export { exp_module; exp_function; exp_args } ->
+     wbyte 113;
+     encode_term (ET_Atom exp_module);
+     encode_term (ET_Atom exp_function);
+     encode_term (ET_Int exp_args)
+  | ET_Port { port_node; port_id; port_creation } ->
+     wbyte 102;
+     encode_term (ET_Atom port_node);
+     wint (Int32.to_int_exn port_id);
+     wbyte port_creation
   | ET_Tuple l ->
-    (match List.length l with
-     | len when len < 256 ->
+     (match List.length l with
+      | len when len < 256 ->
          wbyte 104;
          wbyte len;
          List.iter ~f:encode_term l
-     | len ->
+      | len ->
          wbyte 105;
          wint len;
          List.iter ~f:encode_term l)
   | ET_List [] -> wbyte 106
   | ET_List lst ->
-    wbyte 108;
-    wint (List.length lst);
-    List.iter ~f:encode_term lst;
-    wbyte 106
+     wbyte 108;
+     wint (List.length lst);
+     List.iter ~f:encode_term lst;
+     wbyte 106
   | ET_Map pairs ->
-    wbyte 116;
-    wint (List.length pairs);
-    List.iter ~f:(fun (k, v) -> encode_term k; encode_term v) pairs
+     wbyte 116;
+     wint (List.length pairs);
+     List.iter ~f:(fun (k, v) -> encode_term k; encode_term v) pairs
 
 
 (* The buffer code here is used to read and write terms from buffers *)
