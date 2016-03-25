@@ -45,17 +45,17 @@ type t =
  and
   fun_ext = { fn_pid : t;
               fn_module : string;
-              fn_index : int;
-              fn_uniq : int;
+              fn_index : Int32.t;
+              fn_uniq : Int32.t;
               fn_free_vars : t list }
  and
   nf_ext = { nf_arity : int;
              nf_uniq : string;
-             nf_index : int;
-             nf_num_free : int;
+             nf_index : Int32.t;
+             nf_num_free : Int32.t;
              nf_module : string;
-             nf_old_index : int;
-             nf_old_uniq : int;
+             nf_old_index : Int32.t;
+             nf_old_uniq : Int32.t;
              nf_rest : string }
  and
   exp_ext = { exp_module : string;
@@ -201,6 +201,55 @@ let rec decode rbyte rint rint64 rstr rbuf () =
   | 116 ->
      let arity = rint () |> Int32.to_int_exn in
        ET_Map (map_of arity)
+  (* FUN *)
+  | 117 ->
+     let num_free = rint () |> Int32.to_int_exn in
+     let fn_pid = decode_term () in
+     let m = decode_term () in
+     let i = decode_term () in
+     let u = decode_term () in
+     let fn_free_vars = list_of decode_term num_free in
+     (match (m, i, u) with
+      | (ET_Atom fn_module, ET_Int fn_index, ET_Int fn_uniq) ->
+         ET_Fun { fn_pid;
+                  fn_module;
+                  fn_index;
+                  fn_uniq;
+                  fn_free_vars }
+      | _ -> parse_err "Parse error in types of Fun" 117)
+  (* NEW_FUN *)
+  | 112 ->
+     let size = rint () |> Int32.to_int_exn in
+     let nf_arity = rbyte () in
+     let nf_uniq = rstr 16 in
+     let nf_index = rint () in
+     let nf_num_free = rint () in
+     let m = decode_term () in
+     let old_index' = decode_term () in
+     let old_uniq' = decode_term () in
+     let nf_module, nf_old_index, nf_old_uniq =
+       match (m, old_index', old_uniq') with
+       | (ET_Atom mm, ET_Int oidx, ET_Int ouniq) ->
+          (mm, oidx, ouniq)
+       | _ -> parse_err "Parse error in new_fun_spec" 112 in
+     let byte_count x =
+       let x = Int32.to_int_exn x in
+       if (x >= 0 && x < 256) then 2 else 5 in
+     let size_base = 4 + 1 + 16 + 4 + 4
+                     + 3+(String.length nf_module)
+                     + byte_count nf_old_index
+                     + byte_count nf_old_uniq in
+     let rest_len = size - size_base in
+     let nf_rest = rstr rest_len in
+     ET_NFun {
+         nf_arity;
+         nf_uniq;
+         nf_index;
+         nf_num_free;
+         nf_module;
+         nf_old_index;
+         nf_old_uniq;
+         nf_rest }
   (* EXPORT *)
   | 113 ->
      let m = decode_term () in
@@ -304,6 +353,40 @@ let rec encode wbyte wint wint64 wstr wbuf term =
      encode_term (ET_Atom port_node);
      wint (Int32.to_int_exn port_id);
      wbyte port_creation
+  | ET_Fun { fn_pid; fn_module; fn_index; fn_uniq; fn_free_vars } ->
+     wbyte 117;
+     wint (List.length fn_free_vars);
+     encode_term fn_pid;
+     encode_term (ET_Atom fn_module);
+     encode_term (ET_Int fn_index);
+     encode_term (ET_Int fn_uniq);
+     List.iter ~f:encode_term fn_free_vars
+  | ET_NFun { nf_arity;
+              nf_uniq;
+              nf_index;
+              nf_num_free;
+              nf_module;
+              nf_old_index;
+              nf_old_uniq;
+              nf_rest } ->
+     let byte_count x =
+       let x = Int32.to_int_exn x in
+       if x >= 0 && x < 256 then 2 else 5 in
+     let size = 4 + 1 + 16 + 4 + 4
+                + 3+(String.length nf_module)
+                + byte_count nf_old_index
+                + byte_count nf_old_uniq
+                + String.length nf_rest in
+     wbyte 112;
+     wint size;
+     wbyte nf_arity;
+     wstr nf_uniq;
+     wint (Int32.to_int_exn nf_index);
+     wint (Int32.to_int_exn nf_num_free);
+     encode_term (ET_Atom nf_module);
+     encode_term (ET_Int nf_old_index);
+     encode_term (ET_Int nf_old_uniq);
+     wstr nf_rest
   | ET_Tuple l ->
      (match List.length l with
       | len when len < 256 ->
